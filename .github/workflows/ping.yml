@@ -1,7 +1,5 @@
 name: keepalive
 
-# 云端计时器：每 5 分钟打一次线上接口，既给沙箱"活跃信号"(续命防休眠)，
-# 又触发面板 /api/keepalive 自愈，把被休眠杀掉的 MC / playit 进程自动拉回来。
 on:
   schedule:
     - cron: '*/5 * * * *'
@@ -18,35 +16,23 @@ jobs:
   heartbeat:
     runs-on: ubuntu-latest
     env:
-      # 固定地址(公开分享链接)，不再依赖仓库里那个失效的 PING_TARGET secret
       KEEPALIVE_URL: https://afdf8336d5232da7f.app.workbuddy.host/api/keepalive?sharecode=MAGCBAUEJT
     steps:
       - name: 云端心跳 + 自愈触发
         run: |
-          set -u
           echo "北京时间: $(TZ=Asia/Shanghai date '+%Y-%m-%d %H:%M:%S')"
           echo "目标: $KEEPALIVE_URL"
           ok=0
           for i in 1 2 3; do
             code=$(curl -s -o /tmp/resp.json -w '%{http_code}' -m 25 "$KEEPALIVE_URL" || echo 000)
             echo "  第${i}次 HTTP=$code"
-            [ "$code" = "200" ] && { ok=1; break; }
+            if [ "$code" = "200" ]; then ok=1; break; fi
             sleep 3
           done
           echo "--- 面板自愈返回 ---"
           cat /tmp/resp.json 2>/dev/null || echo "(无响应)"
-          echo
+          echo ""
           if [ "$ok" = "1" ]; then
-            python3 -c "
-import json
-try:
-    d=json.load(open('/tmp/resp.json'))
-    print('  mc_running    =', d.get('mc_running'))
-    print('  playit_running=', d.get('playit_running'))
-    print('  actions       =', d.get('actions'))
-    print('  panel_ts      =', d.get('ts'))
-except Exception as e: print('  解析失败:', e)
-"
             echo "RESULT=OK" >> "$GITHUB_ENV"
           else
             echo "RESULT=DOWN" >> "$GITHUB_ENV"
@@ -55,7 +41,7 @@ except Exception as e: print('  解析失败:', e)
 
       - name: 计时日志
         run: |
-          echo "## 云端心跳计时 :clock1:" >> "$GITHUB_STEP_SUMMARY"
-          echo "- 北京时间: \`$(TZ=Asia/Shanghai date '+%Y-%m-%d %H:%M:%S')\`" >> "$GITHUB_STEP_SUMMARY"
-          echo "- 结果: **${RESULT:-UNKNOWN}**  运行 #${{ github.run_number }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "## 云端心跳计时" >> "$GITHUB_STEP_SUMMARY"
+          echo "- 北京时间: $(TZ=Asia/Shanghai date '+%Y-%m-%d %H:%M:%S')" >> "$GITHUB_STEP_SUMMARY"
+          echo "- 结果: ${RESULT:-UNKNOWN} / 运行 #${{ github.run_number }}" >> "$GITHUB_STEP_SUMMARY"
           echo "- 目标: keepalive 自愈接口 (scooter-dsc.tun.ply.gg:25565)" >> "$GITHUB_STEP_SUMMARY"
