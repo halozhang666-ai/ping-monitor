@@ -1,8 +1,12 @@
 name: keepalive
 
+# 云端唤醒计时：GitHub Actions 免费版 schedule 最小粒度就是 5 分钟。
+# 用错峰分钟(:03/:08/.../:58)避开整点调度高峰，降低免费版排队延迟。
+# 每次运行打线上 keepalive：既给容器平台"活跃/唤醒信号"(防关机)，
+# 又触发面板隐藏守护把 MC 与 playit 自动拉起。
 on:
   schedule:
-    - cron: '*/5 * * * *'
+    - cron: '3,8,13,18,23,28,33,38,43,48,53,58 * * * *'
   workflow_dispatch:
 
 permissions:
@@ -18,30 +22,25 @@ jobs:
     env:
       KEEPALIVE_URL: https://afdf8336d5232da7f.app.workbuddy.host/api/keepalive?sharecode=MAGCBAUEJT
     steps:
-      - name: 云端心跳 + 自愈触发
+      - name: 5分钟心跳 + 唤醒自愈
         run: |
-          echo "北京时间: $(TZ=Asia/Shanghai date '+%Y-%m-%d %H:%M:%S')"
+          echo "北京时间: $(TZ=Asia/Shanghai date '+%Y-%m-%d %H:%M:%S') | 目标: 每5分钟一次"
           echo "目标: $KEEPALIVE_URL"
           ok=0
-          for i in 1 2 3; do
-            code=$(curl -s -o /tmp/resp.json -w '%{http_code}' -m 25 "$KEEPALIVE_URL" || echo 000)
+          for i in $(seq 1 10); do
+            code=$(curl -s -o /tmp/resp.json -w '%{http_code}' -m 20 "$KEEPALIVE_URL" || echo 000)
             echo "  第${i}次 HTTP=$code"
             if [ "$code" = "200" ]; then ok=1; break; fi
-            sleep 3
+            sleep 6
           done
-          echo "--- 面板自愈返回 ---"
+          echo "--- 面板返回 ---"
           cat /tmp/resp.json 2>/dev/null || echo "(无响应)"
           echo ""
-          if [ "$ok" = "1" ]; then
-            echo "RESULT=OK" >> "$GITHUB_ENV"
-          else
-            echo "RESULT=DOWN" >> "$GITHUB_ENV"
-          fi
-          echo "结束时间: $(TZ=Asia/Shanghai date '+%Y-%m-%d %H:%M:%S')"
+          if [ "$ok" = "1" ]; then echo "RESULT=OK" >> "$GITHUB_ENV"; else echo "RESULT=DOWN" >> "$GITHUB_ENV"; fi
+          echo "结束: $(TZ=Asia/Shanghai date '+%H:%M:%S')"
 
       - name: 计时日志
         run: |
-          echo "## 云端心跳计时" >> "$GITHUB_STEP_SUMMARY"
+          echo "## 云端心跳 #${{ github.run_number }}" >> "$GITHUB_STEP_SUMMARY"
           echo "- 北京时间: $(TZ=Asia/Shanghai date '+%Y-%m-%d %H:%M:%S')" >> "$GITHUB_STEP_SUMMARY"
-          echo "- 结果: ${RESULT:-UNKNOWN} / 运行 #${{ github.run_number }}" >> "$GITHUB_STEP_SUMMARY"
-          echo "- 目标: keepalive 自愈接口 (scooter-dsc.tun.ply.gg:25565)" >> "$GITHUB_STEP_SUMMARY"
+          echo "- 结果: ${RESULT:-UNKNOWN} / 目标: 每5分钟一次" >> "$GITHUB_STEP_SUMMARY"
