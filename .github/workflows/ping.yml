@@ -1,22 +1,64 @@
-name: ping
+name: keepalive
 
+# 云端计时器：每 5 分钟打一次线上接口，既是"容器活跃信号"(续命防休眠)，
+# 又触发面板 /api/keepalive 自愈，把被休眠杀掉的 MC / playit 进程自动拉回来。
 on:
   schedule:
-    - cron: '*/10 * * * *'
+    - cron: '*/5 * * * *'
   workflow_dispatch:
 
+permissions:
+  contents: write
+
+concurrency:
+  group: keepalive
+  cancel-in-progress: true
+
 jobs:
-  ping:
+  heartbeat:
     runs-on: ubuntu-latest
     steps:
-      - name: Ping target
-        continue-on-error: true
+      - name: 云端心跳 + 自愈触发
         env:
           PING_TARGET: ${{ secrets.PING_TARGET }}
         run: |
-          echo "ping -> ${PING_TARGET}"
-          if curl -fsS -m 20 "$PING_TARGET" -o /dev/null; then
-            echo "reachable"
+          set -u
+          TARGET="${PING_TARGET:-https://afdf8336d5232da7f.app.workbuddy.host/api/keepalive?sharecode=MAGCBAUEJT}"
+          echo "北京时间: $(TZ=Asia/Shanghai date '+%Y-%m-%d %H:%M:%S')"
+          echo "目标: $TARGET"
+          ok=0
+          for i in 1 2 3; do
+            code=$(curl -s -o /tmp/resp.json -w '%{http_code}' -m 25 "$TARGET" || echo 000)
+            echo "  第${i}次 HTTP=$code"
+            [ "$code" = "200" ] && { ok=1; break; }
+            sleep 3
+          done
+          echo "--- 面板自愈返回 ---"
+          cat /tmp/resp.json 2>/dev/null || echo "(无响应)"
+          echo
+          if [ "$ok" = "1" ]; then
+            python3 - << 'PY'
+          import json
+          try:
+              d=json.load(open('/tmp/resp.json'))
+              print("  mc_running    =", d.get('mc_running'))
+              print("  playit_running=", d.get('playit_running'))
+              print("  actions       =", d.get('actions'))
+              print("  panel_ts      =", d.get('ts'))
+          except Exception as e:
+              print("  解析失败:", e)
+          PY
+            echo "RESULT=OK" >> "$GITHUB_ENV"
           else
-            echo "no response"
+            echo "RESULT=DOWN" >> "$GITHUB_ENV"
           fi
+          echo "结束时间: $(TZ=Asia/Shanghai date '+%Y-%m-%d %H:%M:%S')"
+
+      - name: 记录计时日志到仓库
+        run: |
+          echo "## 云端心跳计时 :clock1:" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "- 运行时间(北京): \`$(TZ=Asia/Shanghai date '+%Y-%m-%d %H:%M:%S')\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- 结果: **${RESULT:-UNKNOWN}**" >> "$GITHUB_STEP_SUMMARY"
+          echo "- 目标: \`scooter-dsc.tun.ply.gg:25565\` / 面板 keepalive" >> "$GITHUB_STEP_SUMMARY"
+          echo "- 运行序号: #${{ github.run_number }}" >> "$GITHUB_STEP_SUMMARY"
